@@ -1,0 +1,17 @@
+{
+  "name": "raj-mishra-whatsapp-bot",
+  "version": "1.0.0",
+  "description": "RAJ MISHRA — WhatsApp Bot Controller",
+  "main": "server.js",
+  "author": "RAJ MISHRA",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.24",
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2",
+    "pino": "^8.17.2",
+    "chalk": "^4.1.2"
+  }
+}
