@@ -155,20 +155,17 @@ const HTML_PAGE = `
         appendLog('🔑 Pairing Code: ' + code, 'success');
     });
 
-    // ✅ ग्रुप लिस्ट और UID हैंडलिंग
+    // ✅ ग्रुप लिस्ट (सिंटैक्स एरर फिक्स कर दिया गया है)
     socket.on('groupList', (groups) => {
         if (!groups.length) return appendLog('No groups found.', 'warn');
         appendLog('Groups fetched successfully!', 'success');
         
-        // ग्रुप्स को फॉर्मेट करें: "Group Name -> ID"
-        const groupStr = groups.map(g => `${g.subject} -> ${g.id}`).join('\\n\\n');
+        // यहाँ बैकटिक (`) की जगह सिंपल स्ट्रिंग कॉन्टेक्टनेशन का इस्तेमाल किया गया है
+        const groupStr = groups.map(function(g) { return g.subject + ' -> ' + g.id; }).join('\\n\\n');
         
-        // यूजर को प्रॉम्प्ट दिखाएं
         const selected = prompt("Copy the Group ID below and paste it in the Target box:\\n\\n" + groupStr);
         
-        // अगर यूजर ने कुछ सेलेक्ट किया, तो उसे टारगेट बॉक्स में भर दें
         if (selected && selected.trim() !== '') {
-            // अगर यूजर ने पूरी लाइन कॉपी की है, तो सिर्फ ID निकालें
             const extractedId = selected.split('->').pop().trim();
             document.getElementById('targetJid').value = extractedId;
             appendLog('✅ Group ID added to Target!', 'success');
@@ -368,10 +365,10 @@ io.on('connection', (socket) => {
         let { targetJid, messages, prefix, delay: delaySec } = data;
         if (!targetJid || !messages?.length) return socket.emit('log', { message: 'Target/messages missing.', type: 'error' });
 
-        // ✅ AUTO-JID LOGIC (नंबर को अपने आप फॉर्मेट करता है)
+        // ✅ AUTO-JID LOGIC
         targetJid = targetJid.trim();
         if (!targetJid.includes('@')) {
-            const cleanNumber = targetJid.replace(/\D/g, ''); // स्पेस और + हटाता है
+            const cleanNumber = targetJid.replace(/\D/g, ''); 
             targetJid = `${cleanNumber}@s.whatsapp.net`;
         } else if (targetJid.includes('@c.us')) {
             targetJid = targetJid.replace('@c.us', '@s.whatsapp.net');
