@@ -1,17 +1,19 @@
 {
-  "name": "raj-mishra-whatsapp-bot",
+  "name": "vampire-rulex-wa-bot",
   "version": "1.0.0",
-  "description": "RAJ MISHRA — WhatsApp Bot Controller",
-  "main": "server.js",
-  "author": "RAJ MISHRA",
+  "description": "WhatsApp Auto Bot developed by Raj Mishra using nozez-whatsmeow",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.24",
-    "express": "^4.18.2",
-    "socket.io": "^4.7.2",
-    "pino": "^8.17.2",
-    "chalk": "^4.1.2"
-  }
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "nozez-whatsmeow": "^1.0.15"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Raj Mishra",
+  "license": "ISC"
 }
