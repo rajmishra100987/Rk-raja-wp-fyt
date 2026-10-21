@@ -2,7 +2,18 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const { makeWASocket } = require('nozez-whatsmeow');
+const fs = require('fs');
 const crypto = require('crypto');
+
+// ================================================================
+//        🛡️ CRASH-PROOF: Never let the process die
+// ================================================================
+process.on('uncaughtException', (err) => {
+    console.error('[UNCAUGHT]', err?.message || err);
+});
+process.on('unhandledRejection', (err) => {
+    console.error('[UNHANDLED]', err?.message || err);
+});
 
 // ================================================================
 //                DEVELOPED BY RAJ MISHRA
@@ -18,8 +29,6 @@ app.use(express.urlencoded({ extended: true }));
 let sock = null;
 let isConnected = false;
 let pairingRequested = false;
-let captureSocketId = null; 
-let captureTimeout = null;
 
 const tasks = new Map();
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -47,10 +56,8 @@ const HTML_PAGE = `
     .header h1 { font-size: 26px; background: linear-gradient(90deg, #ff4d88, #ff8bb3, #ff4d88); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; letter-spacing: 1px; margin-bottom: 6px; }
     .header .owner { font-size: 13px; color: #b86a85; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; }
     .badge { display: inline-block; background: #fff0f5; color: #d6336c; padding: 4px 12px; border-radius: 20px; font-size: 11px; margin-top: 8px; border: 1px solid #ffd6e3; }
-    
     .status-bar { background: #fff0f5; padding: 10px; border-radius: 10px; text-align: center; font-weight: bold; margin-bottom: 15px; color: #d6336c; border: 1px solid #ffd6e3; }
     .status-bar.connected { background: #e8f5e9; color: #2e7d32; border-color: #c8e6c9; }
-    
     label { display: block; font-size: 13px; font-weight: 600; color: #8a3e5c; margin-bottom: 6px; margin-top: 14px; }
     input, textarea { width: 100%; padding: 12px 14px; border: 1.5px solid #ffe3ec; border-radius: 12px; background: #fffafc; font-size: 14px; color: #4a2b38; transition: all 0.25s; outline: none; }
     input:focus, textarea:focus { border-color: #ff8bb3; background: #ffffff; box-shadow: 0 0 0 4px rgba(255, 139, 179, 0.12); }
@@ -60,7 +67,6 @@ const HTML_PAGE = `
     .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
     .btn-outline { background: transparent; color: #ff5c8a; border: 2px solid #ff5c8a; box-shadow: none; }
     .btn-outline:hover { background: #fff0f5; box-shadow: none; }
-    
     .log-box { margin-top: 22px; background: #fffaf5; border: 1.5px solid #ffe3ec; border-radius: 14px; padding: 14px; height: 200px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 12px; color: #5c3040; }
     .log-box::-webkit-scrollbar { width: 6px; }
     .log-box::-webkit-scrollbar-thumb { background: #ffb8ce; border-radius: 10px; }
@@ -68,8 +74,6 @@ const HTML_PAGE = `
     .log-success { color: #2e7d32; }
     .log-error { color: #c62828; }
     .log-warn { color: #ef6c00; }
-    .log-info { color: #1976d2; }
-    
     .footer { text-align: center; margin-top: 24px; padding-top: 16px; border-top: 1px solid #ffe3ec; font-size: 12px; color: #b86a85; }
     .footer b { color: #d6336c; }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -84,39 +88,30 @@ const HTML_PAGE = `
         <div class="owner">Owner: Raj Mishra</div>
         <span class="badge">⚡ WhatsApp Auto Bot</span>
     </div>
-
     <div class="status-bar" id="statusBar">🔴 Bot Disconnected</div>
-
     <div id="connectSection">
         <label>📞 WhatsApp Number (with country code, no +)</label>
         <input type="text" id="phoneNumber" placeholder="e.g. 919876543210">
         <button class="btn" id="connectBtn" onclick="connectBot()">🔗 Connect Bot</button>
         <div class="pairing-code" id="pairingCodeDiv"></div>
     </div>
-
     <div id="taskSection" style="display: none;">
         <label>🎯 Target Number or Group ID</label>
         <div class="grid-2">
-            <input type="text" id="targetJid" placeholder="Number or Group ID">
-            <button class="btn btn-outline" style="margin-top:0;" onclick="captureGroup()">📡 Auto-Capture Group</button>
+            <input type="text" id="targetJid" placeholder="e.g. 919876543210 (Number)">
+            <button class="btn btn-outline" style="margin-top:0;" onclick="fetchGroups()">📋 Fetch Groups</button>
         </div>
-        
         <label>💬 Name Prefix</label>
         <input type="text" id="prefix" placeholder="e.g. RAJ MISHRA">
-        
         <label>⏱️ Delay (seconds)</label>
         <input type="number" id="delaySec" value="5" min="1">
-        
         <label>📄 Messages (One message per line)</label>
         <textarea id="messages" placeholder="Hello World&#10;This is a test"></textarea>
-        
         <button class="btn" onclick="startTask()">🚀 START TASK</button>
     </div>
-
     <div class="log-box" id="logBox"></div>
     <div class="footer">Developed with 💖 by <b>VAMPIRE RULEX</b> • Owner: <b>Raj Mishra</b></div>
 </div>
-
 <script>
     const socket = io();
     const logBox = document.getElementById('logBox');
@@ -133,9 +128,7 @@ const HTML_PAGE = `
         logBox.appendChild(line);
         logBox.scrollTop = logBox.scrollHeight;
     }
-
     socket.on('log', (data) => appendLog(data.message, data.type));
-    
     socket.on('botStatus', (data) => {
         if (data.connected) {
             statusBar.textContent = '🟢 Bot Logged In & Active';
@@ -152,18 +145,22 @@ const HTML_PAGE = `
             connectBtn.disabled = false;
         }
     });
-
     socket.on('pairingCode', (code) => {
         pairingCodeDiv.style.display = 'block';
         pairingCodeDiv.textContent = code;
         appendLog('🔑 Pairing Code: ' + code, 'success');
     });
-
-    socket.on('groupCaptured', (jid) => {
-        document.getElementById('targetJid').value = jid;
-        appendLog('✅ Group ID Captured Successfully!', 'success');
+    socket.on('groupList', (groups) => {
+        if (!groups.length) return appendLog('No groups found.', 'warn');
+        appendLog('Groups fetched successfully!', 'success');
+        const groupStr = groups.map(function(g) { return g.subject + ' -> ' + g.id; }).join('\\n\\n');
+        const selected = prompt("Copy the Group ID below and paste it in the Target box:\\n\\n" + groupStr);
+        if (selected && selected.trim() !== '') {
+            const extractedId = selected.split('->').pop().trim();
+            document.getElementById('targetJid').value = extractedId;
+            appendLog('✅ Group ID added to Target!', 'success');
+        }
     });
-
     function connectBot() {
         const phone = document.getElementById('phoneNumber').value.trim();
         if (!phone) return alert('Enter phone number!');
@@ -171,23 +168,21 @@ const HTML_PAGE = `
         appendLog('🔄 Connecting to WhatsApp...', 'info');
         socket.emit('connectBot', { phoneNumber: phone });
     }
-
-    function captureGroup() {
-        appendLog('⏳ Listening for group message... Send ANY message in your target group from your phone now!', 'warn');
-        socket.emit('captureGroup');
+    function fetchGroups() {
+        appendLog('⏳ Fetching groups...', 'info');
+        socket.emit('getGroups');
     }
-
     function startTask() {
         const targetJid = document.getElementById('targetJid').value.trim();
         const prefix = document.getElementById('prefix').value.trim();
         const delaySec = document.getElementById('delaySec').value;
         const msgText = document.getElementById('messages').value.trim();
-        
         if (!targetJid || !msgText) return alert('Target ID and Messages are required!');
         const messages = msgText.split('\\n').map(m => m.trim()).filter(m => m);
         socket.emit('startTask', { targetJid, messages, prefix, delay: delaySec });
-        appendLog('🚀 Task started!', 'success');
+        appendLog('🚀 Task sent to server!', 'success');
     }
+    socket.emit('getTasks');
 </script>
 </body>
 </html>
@@ -201,11 +196,10 @@ async function startBot(phoneNumber, socketId, autoRetry = true) {
         io.to(socketId).emit('log', { message: 'Bot is already initializing...', type: 'warn' });
         return;
     }
-
     pairingRequested = false;
     isConnected = false;
 
-    sock = makeWASocket({ sessionName: "vampire-session" });
+    sock = makeWASocket({ sessionName: "nozez-session" });
 
     sock.ev.on("pairing_code", (code) => {
         pairingRequested = true;
@@ -213,57 +207,17 @@ async function startBot(phoneNumber, socketId, autoRetry = true) {
         io.to(socketId).emit('log', { message: `🔑 Pairing Code: ${code}`, type: 'success' });
     });
 
-    // ✅ पहला बदलाव यहाँ किया गया है
-    sock.ev.on("raw_message", (data) => {
-        if (captureSocketId) {
-            io.to(captureSocketId).emit('log', { message: `📩 Received message from: ${data.chat || 'Unknown'}`, type: 'info' });
-            
-            const jid = data.chat;
-            if (jid && jid.endsWith('@g.us')) {
-                io.to(captureSocketId).emit('groupCaptured', jid);
-                io.to(captureSocketId).emit('log', { message: `✅ Group Captured: ${jid}`, type: 'success' });
-                
-                captureSocketId = null;
-                if (captureTimeout) {
-                    clearTimeout(captureTimeout);
-                    captureTimeout = null;
-                }
-            }
-        }
-    });
-
-    // ✅ दूसरा बदलाव यहाँ किया गया है
-    sock.ev.on("messages.upsert", (data) => {
-        if (captureSocketId && data?.messages?.[0]?.key?.remoteJid) {
-            const jid = data.messages[0].key.remoteJid;
-            if (jid.endsWith('@g.us')) {
-                io.to(captureSocketId).emit('groupCaptured', jid);
-                io.to(captureSocketId).emit('log', { message: `✅ Group Captured (via upsert): ${jid}`, type: 'success' });
-                
-                captureSocketId = null;
-                if (captureTimeout) {
-                    clearTimeout(captureTimeout);
-                    captureTimeout = null;
-                }
-            }
-        }
-    });
-
     sock.ev.on("connection.update", async (data) => {
         if (data.open) {
             isConnected = true;
             io.to(socketId).emit('log', { message: '[SUCCESS] WhatsApp Connected! 🎉', type: 'success' });
             io.to(socketId).emit('botStatus', { connected: true });
-        } else if (data.reason === "connection_lost" || data.reason === "stream_error" || data.reason === "process_exit") {
+        } else if (data.reason === "connection_lost" || data.reason === "stream_error") {
             isConnected = false;
             io.to(socketId).emit('log', { message: '[-] Connection lost. Reconnecting...', type: 'warn' });
             io.to(socketId).emit('botStatus', { connected: false });
-            
-            if (sock && typeof sock.stop === 'function') {
-                try { sock.stop(); } catch (e) {}
-            }
+            if (sock && typeof sock.stop === 'function') { try { sock.stop(); } catch (e) {} }
             sock = null;
-            
             if (autoRetry) {
                 await delay(3000);
                 startBot(phoneNumber, socketId, true);
@@ -289,11 +243,9 @@ async function startBot(phoneNumber, socketId, autoRetry = true) {
 // ================================================================
 async function runTaskLoop(task) {
     task.status = 'running';
-
     while (task.loopRunning) {
         for (let i = 0; i < task.messages.length; i++) {
             if (!task.loopRunning) break;
-            
             let waitGuard = 0;
             while ((!sock || !isConnected) && task.loopRunning && waitGuard < 60) {
                 await delay(1000);
@@ -305,10 +257,8 @@ async function runTaskLoop(task) {
                 task.loopRunning = false;
                 break;
             }
-
             task.sentCount++;
             const fullMessage = `${(task.prefix || '').trim()} ${task.messages[i]}`.trim();
-
             try {
                 await sock.sendMessage(task.targetJid, { text: fullMessage });
                 io.emit('log', { message: `[SUCCESS] #${task.sentCount}: ${fullMessage}`, type: 'success' });
@@ -321,17 +271,31 @@ async function runTaskLoop(task) {
         task.roundCount++;
         io.emit('log', { message: `[+] Round ${task.roundCount} finished. Restarting...`, type: 'info' });
     }
-
     task.status = 'stopped';
     io.emit('log', { message: `Task ${task.id} stopped. Total sent: ${task.sentCount}`, type: 'warn' });
 }
 
 // ================================================================
-//                EXPRESS ROUTES & SOCKET.IO
+//        ✅ ROUTES — HEAD 200 + GET 200 on every path
 // ================================================================
-app.get('/', (req, res) => res.send(HTML_PAGE));
-app.get('/health', (req, res) => res.status(200).send('OK'));
 
+// Root — GET returns HTML, HEAD returns 200 (no body)
+app.get('/', (req, res) => res.status(200).send(HTML_PAGE));
+app.head('/', (req, res) => res.status(200).end());
+
+// Health — GET + HEAD both return 200
+app.get('/health', (req, res) => res.status(200).send('OK'));
+app.head('/health', (req, res) => res.status(200).end());
+
+// Extra: HEAD on /status, /ping, /uptime (some monitors hit these)
+['/status', '/ping', '/uptime', '/keepalive', '/live'].forEach((p) => {
+    app.get(p, (req, res) => res.status(200).send('OK'));
+    app.head(p, (req, res) => res.status(200).end());
+});
+
+// ================================================================
+//                SOCKET.IO
+// ================================================================
 io.on('connection', (socket) => {
     socket.emit('botStatus', { connected: isConnected });
 
@@ -341,34 +305,28 @@ io.on('connection', (socket) => {
         await startBot(phoneNumber, socket.id);
     });
 
-    socket.on('captureGroup', () => {
-        if (!sock || !isConnected) return socket.emit('log', { message: 'Bot not connected.', type: 'warn' });
-        captureSocketId = socket.id;
-        
-        if (captureTimeout) clearTimeout(captureTimeout);
-        captureTimeout = setTimeout(() => {
-            if (captureSocketId === socket.id) {
-                socket.emit('log', { message: '❌ Capture timed out. Please try again.', type: 'error' });
-                captureSocketId = null;
-                captureTimeout = null;
-            }
-        }, 60000);
+    socket.on('getGroups', async () => {
+        if (!sock || !isConnected) return socket.emit('log', { message: 'Bot not connected properly.', type: 'warn' });
+        try {
+            const groups = await sock.groupFetchAllParticipating();
+            const list = Object.values(groups).map(g => ({ id: g.id, subject: g.subject }));
+            socket.emit('groupList', list);
+        } catch (err) {
+            socket.emit('log', { message: `Group fetch error: ${err.message}`, type: 'error' });
+        }
     });
 
     socket.on('startTask', (data) => {
         if (!sock || !isConnected) return socket.emit('log', { message: 'Bot not connected.', type: 'error' });
-        
         let { targetJid, messages, prefix, delay: delaySec } = data;
         if (!targetJid || !messages?.length) return socket.emit('log', { message: 'Target/messages missing.', type: 'error' });
-
         targetJid = targetJid.trim();
         if (!targetJid.includes('@')) {
-            const cleanNumber = targetJid.replace(/\D/g, ''); 
+            const cleanNumber = targetJid.replace(/\D/g, '');
             targetJid = `${cleanNumber}@s.whatsapp.net`;
         } else if (targetJid.includes('@c.us')) {
             targetJid = targetJid.replace('@c.us', '@s.whatsapp.net');
         }
-
         const taskId = genTaskId();
         const task = {
             id: taskId, targetJid, messages: [...messages],
@@ -381,9 +339,7 @@ io.on('connection', (socket) => {
 
     socket.on('stopBot', () => {
         for (const t of tasks.values()) t.loopRunning = false;
-        if (sock && typeof sock.stop === 'function') {
-            try { sock.stop(); } catch (e) {}
-        }
+        if (sock && typeof sock.stop === 'function') { try { sock.stop(); } catch (e) {} }
         sock = null;
         isConnected = false;
         io.emit('log', { message: 'Bot stopped by user.', type: 'warn' });
@@ -391,7 +347,16 @@ io.on('connection', (socket) => {
     });
 });
 
+// ================================================================
+//   🚨 CATCH-ALL — any path + any method = 200 (never goes down)
+//   Placed AFTER socket.io + all routes so it never breaks them
+// ================================================================
+app.all('*', (req, res) => res.status(200).send('OK'));
+
+// ================================================================
+//                SERVER START
+// ================================================================
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    // Silent start
+    console.log(`✅ Server running on port ${PORT}`);
 });
