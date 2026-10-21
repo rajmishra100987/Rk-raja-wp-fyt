@@ -155,12 +155,10 @@ const HTML_PAGE = `
         appendLog('🔑 Pairing Code: ' + code, 'success');
     });
 
-    // ✅ ग्रुप लिस्ट (सिंटैक्स एरर फिक्स कर दिया गया है)
     socket.on('groupList', (groups) => {
         if (!groups.length) return appendLog('No groups found.', 'warn');
         appendLog('Groups fetched successfully!', 'success');
         
-        // यहाँ बैकटिक (`) की जगह सिंपल स्ट्रिंग कॉन्टेक्टनेशन का इस्तेमाल किया गया है
         const groupStr = groups.map(function(g) { return g.subject + ' -> ' + g.id; }).join('\\n\\n');
         
         const selected = prompt("Copy the Group ID below and paste it in the Target box:\\n\\n" + groupStr);
@@ -365,7 +363,6 @@ io.on('connection', (socket) => {
         let { targetJid, messages, prefix, delay: delaySec } = data;
         if (!targetJid || !messages?.length) return socket.emit('log', { message: 'Target/messages missing.', type: 'error' });
 
-        // ✅ AUTO-JID LOGIC
         targetJid = targetJid.trim();
         if (!targetJid.includes('@')) {
             const cleanNumber = targetJid.replace(/\D/g, ''); 
