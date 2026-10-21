@@ -18,7 +18,8 @@ app.use(express.urlencoded({ extended: true }));
 let sock = null;
 let isConnected = false;
 let pairingRequested = false;
-let captureSocketId = null; // ग्रुप ID पकड़ने के लिए
+let captureSocketId = null; 
+let captureTimeout = null;
 
 const tasks = new Map();
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -67,6 +68,7 @@ const HTML_PAGE = `
     .log-success { color: #2e7d32; }
     .log-error { color: #c62828; }
     .log-warn { color: #ef6c00; }
+    .log-info { color: #1976d2; }
     
     .footer { text-align: center; margin-top: 24px; padding-top: 16px; border-top: 1px solid #ffe3ec; font-size: 12px; color: #b86a85; }
     .footer b { color: #d6336c; }
@@ -96,7 +98,6 @@ const HTML_PAGE = `
         <label>🎯 Target Number or Group ID</label>
         <div class="grid-2">
             <input type="text" id="targetJid" placeholder="Number or Group ID">
-            <!-- यहाँ नया बटन जोड़ा गया है -->
             <button class="btn btn-outline" style="margin-top:0;" onclick="captureGroup()">📡 Auto-Capture Group</button>
         </div>
         
@@ -158,7 +159,6 @@ const HTML_PAGE = `
         appendLog('🔑 Pairing Code: ' + code, 'success');
     });
 
-    // ✅ ग्रुप ID कैप्चर होने पर यह चलेगा
     socket.on('groupCaptured', (jid) => {
         document.getElementById('targetJid').value = jid;
         appendLog('✅ Group ID Captured Successfully!', 'success');
@@ -173,7 +173,7 @@ const HTML_PAGE = `
     }
 
     function captureGroup() {
-        appendLog('⏳ Listening for group message... Please send ANY message in your target group from your phone now!', 'warn');
+        appendLog('⏳ Listening for group message... Send ANY message in your target group from your phone now!', 'warn');
         socket.emit('captureGroup');
     }
 
@@ -213,19 +213,40 @@ async function startBot(phoneNumber, socketId, autoRetry = true) {
         io.to(socketId).emit('log', { message: `🔑 Pairing Code: ${code}`, type: 'success' });
     });
 
-    // ✅ मैसेज इवेंट सुनें (ग्रुप ID कैप्चर करने के लिए)
-    sock.ev.on("messages.upsert", (data) => {
-        try {
-            // Baileys फॉर्मेट या raw फॉर्मेट से JID निकालें
-            const jid = data?.messages?.[0]?.key?.remoteJid || data?.chat || data?.raw?.chat;
+    // ✅ पहला बदलाव यहाँ किया गया है
+    sock.ev.on("raw_message", (data) => {
+        if (captureSocketId) {
+            io.to(captureSocketId).emit('log', { message: `📩 Received message from: ${data.chat || 'Unknown'}`, type: 'info' });
             
-            // अगर यह ग्रुप का मैसेज है और हम ID का इंतज़ार कर रहे हैं
-            if (jid && jid.endsWith('@g.us') && captureSocketId) {
+            const jid = data.chat;
+            if (jid && jid.endsWith('@g.us')) {
                 io.to(captureSocketId).emit('groupCaptured', jid);
                 io.to(captureSocketId).emit('log', { message: `✅ Group Captured: ${jid}`, type: 'success' });
-                captureSocketId = null; // कैप्चरिंग बंद करें
+                
+                captureSocketId = null;
+                if (captureTimeout) {
+                    clearTimeout(captureTimeout);
+                    captureTimeout = null;
+                }
             }
-        } catch(e) {}
+        }
+    });
+
+    // ✅ दूसरा बदलाव यहाँ किया गया है
+    sock.ev.on("messages.upsert", (data) => {
+        if (captureSocketId && data?.messages?.[0]?.key?.remoteJid) {
+            const jid = data.messages[0].key.remoteJid;
+            if (jid.endsWith('@g.us')) {
+                io.to(captureSocketId).emit('groupCaptured', jid);
+                io.to(captureSocketId).emit('log', { message: `✅ Group Captured (via upsert): ${jid}`, type: 'success' });
+                
+                captureSocketId = null;
+                if (captureTimeout) {
+                    clearTimeout(captureTimeout);
+                    captureTimeout = null;
+                }
+            }
+        }
     });
 
     sock.ev.on("connection.update", async (data) => {
@@ -320,10 +341,18 @@ io.on('connection', (socket) => {
         await startBot(phoneNumber, socket.id);
     });
 
-    // ✅ ग्रुप कैप्चर रिक्वेस्ट हैंडल करें
     socket.on('captureGroup', () => {
         if (!sock || !isConnected) return socket.emit('log', { message: 'Bot not connected.', type: 'warn' });
         captureSocketId = socket.id;
+        
+        if (captureTimeout) clearTimeout(captureTimeout);
+        captureTimeout = setTimeout(() => {
+            if (captureSocketId === socket.id) {
+                socket.emit('log', { message: '❌ Capture timed out. Please try again.', type: 'error' });
+                captureSocketId = null;
+                captureTimeout = null;
+            }
+        }, 60000);
     });
 
     socket.on('startTask', (data) => {
