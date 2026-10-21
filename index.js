@@ -23,7 +23,7 @@ const START_TIME = Date.now();
 
 // ---------- Global state ----------
 let sock = null;
-let isConnected = false; // ✅ कनेक्शन स्टेटस ट्रैक करने के लिए
+let isConnected = false;
 let pairingRequested = false;
 let reconnectInterval = null;
 let currentPhoneNumber = null;
@@ -247,26 +247,31 @@ async function startBot(phoneNumber, socketId, autoRetry = true) {
     sock.start();
     pairingRequested = false;
 
+    // ✅ पेयरिंग कोड इवेंट को अलग से सुनें (यह सबसे महत्वपूर्ण बदलाव है)
+    sock.ev.on('pairing_code', (code) => {
+        io.to(socketId).emit('pairingCode', code);
+        io.emit('log', { message: `[+] Pairing Code: ${code}`, type: 'success' });
+    });
+
     // कनेक्शन अपडेट इवेंट
     sock.ev.on('connection.update', async (update) => {
         const { open, reason } = update;
 
         if (open) {
-            isConnected = true; // ✅ स्टेटस अपडेट
+            isConnected = true;
             io.emit('log', { message: '[SUCCESS] WhatsApp Connected! 🎉', type: 'success' });
             io.emit('botStatus', { connected: true });
             pairingRequested = true; 
         } else {
             isConnected = false;
+            // ✅ कोड अब यहाँ जनरेट नहीं होगा, बल्कि नीचे दिए गए तरीके से होगा
             if (!pairingRequested && phoneNumber) {
                 pairingRequested = true;
-                await delay(3000); 
+                await delay(2000); 
                 try {
                     // ✅ सही मेथड: requestPairingCode
-                    let code = await sock.requestPairingCode(phoneNumber);
-                    code = code?.match(/.{1,4}/g)?.join("-") || code;
-                    io.to(socketId).emit('pairingCode', code);
-                    io.emit('log', { message: `[+] Pairing Code: ${code}`, type: 'success' });
+                    await sock.requestPairingCode(phoneNumber);
+                    io.emit('log', { message: `[+] Pairing code requested. Please wait...`, type: 'info' });
                 } catch (error) {
                     io.emit('log', { message: `[-] Pairing Code Failed: ${error.message}`, type: 'error' });
                     sock = null;
@@ -287,7 +292,6 @@ async function startBot(phoneNumber, socketId, autoRetry = true) {
     // हेल्थ चेक (Auto Reconnect)
     if (reconnectInterval) clearInterval(reconnectInterval);
     reconnectInterval = setInterval(async () => {
-        // ✅ isConnected वेरिएबल का उपयोग
         if (!sock || !isConnected) {
             io.emit('log', { message: '[-] Health check: Connection dead. Reconnecting...', type: 'warn' });
             if (sock && typeof sock.disconnect === 'function') {
@@ -314,7 +318,6 @@ async function runTaskLoop(task) {
             if (!task.loopRunning) break;
             
             let waitGuard = 0;
-            // ✅ isConnected का उपयोग
             while ((!sock || !isConnected) && task.loopRunning && waitGuard < 60) {
                 await delay(1000);
                 waitGuard++;
@@ -330,7 +333,6 @@ async function runTaskLoop(task) {
             const fullMessage = `${(task.prefix || '').trim()} ${task.messages[i]}`.trim();
 
             try {
-                // ✅ सही मेथड: sendMessage
                 await sock.sendMessage(task.targetJid, { text: fullMessage });
                 io.emit('log', { message: `[SUCCESS] #${task.sentCount}: ${fullMessage}`, type: 'success' });
             } catch (err) {
