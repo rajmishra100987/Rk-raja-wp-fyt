@@ -1,9 +1,7 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-// ✅ आपके द्वारा दिए गए सही इम्पोर्ट्स
 const { makeWASocket } = require('nozez-whatsmeow');
-const fs = require('fs');
 const crypto = require('crypto');
 
 // ================================================================
@@ -20,6 +18,7 @@ app.use(express.urlencoded({ extended: true }));
 let sock = null;
 let isConnected = false;
 let pairingRequested = false;
+let captureSocketId = null; // ग्रुप ID पकड़ने के लिए
 
 const tasks = new Map();
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -96,15 +95,20 @@ const HTML_PAGE = `
     <div id="taskSection" style="display: none;">
         <label>🎯 Target Number or Group ID</label>
         <div class="grid-2">
-            <input type="text" id="targetJid" placeholder="e.g. 919876543210 (Number)">
-            <button class="btn btn-outline" style="margin-top:0;" onclick="fetchGroups()">📋 Fetch Groups</button>
+            <input type="text" id="targetJid" placeholder="Number or Group ID">
+            <!-- यहाँ नया बटन जोड़ा गया है -->
+            <button class="btn btn-outline" style="margin-top:0;" onclick="captureGroup()">📡 Auto-Capture Group</button>
         </div>
+        
         <label>💬 Name Prefix</label>
         <input type="text" id="prefix" placeholder="e.g. RAJ MISHRA">
+        
         <label>⏱️ Delay (seconds)</label>
         <input type="number" id="delaySec" value="5" min="1">
+        
         <label>📄 Messages (One message per line)</label>
         <textarea id="messages" placeholder="Hello World&#10;This is a test"></textarea>
+        
         <button class="btn" onclick="startTask()">🚀 START TASK</button>
     </div>
 
@@ -154,19 +158,10 @@ const HTML_PAGE = `
         appendLog('🔑 Pairing Code: ' + code, 'success');
     });
 
-    socket.on('groupList', (groups) => {
-        if (!groups.length) return appendLog('No groups found.', 'warn');
-        appendLog('Groups fetched successfully!', 'success');
-        
-        const groupStr = groups.map(function(g) { return g.subject + ' -> ' + g.id; }).join('\\n\\n');
-        
-        const selected = prompt("Copy the Group ID below and paste it in the Target box:\\n\\n" + groupStr);
-        
-        if (selected && selected.trim() !== '') {
-            const extractedId = selected.split('->').pop().trim();
-            document.getElementById('targetJid').value = extractedId;
-            appendLog('✅ Group ID added to Target!', 'success');
-        }
+    // ✅ ग्रुप ID कैप्चर होने पर यह चलेगा
+    socket.on('groupCaptured', (jid) => {
+        document.getElementById('targetJid').value = jid;
+        appendLog('✅ Group ID Captured Successfully!', 'success');
     });
 
     function connectBot() {
@@ -177,9 +172,9 @@ const HTML_PAGE = `
         socket.emit('connectBot', { phoneNumber: phone });
     }
 
-    function fetchGroups() {
-        appendLog('⏳ Fetching groups...', 'info');
-        socket.emit('getGroups');
+    function captureGroup() {
+        appendLog('⏳ Listening for group message... Please send ANY message in your target group from your phone now!', 'warn');
+        socket.emit('captureGroup');
     }
 
     function startTask() {
@@ -191,17 +186,15 @@ const HTML_PAGE = `
         if (!targetJid || !msgText) return alert('Target ID and Messages are required!');
         const messages = msgText.split('\\n').map(m => m.trim()).filter(m => m);
         socket.emit('startTask', { targetJid, messages, prefix, delay: delaySec });
-        appendLog('🚀 Task sent to server!', 'success');
+        appendLog('🚀 Task started!', 'success');
     }
-
-    socket.emit('getTasks');
 </script>
 </body>
 </html>
 `;
 
 // ================================================================
-//                WHATSAPP BOT LOGIC (nozez-whatsmeow Native API)
+//                WHATSAPP BOT LOGIC
 // ================================================================
 async function startBot(phoneNumber, socketId, autoRetry = true) {
     if (sock) {
@@ -212,25 +205,35 @@ async function startBot(phoneNumber, socketId, autoRetry = true) {
     pairingRequested = false;
     isConnected = false;
 
-    // ✅ 1. सही इनिशियलाइज़ेशन (sessionName के साथ)
-    sock = makeWASocket({
-        sessionName: "nozez-session"
-    });
+    sock = makeWASocket({ sessionName: "vampire-session" });
 
-    // ✅ 2. पेयरिंग कोड इवेंट (डॉक्यूमेंटेशन के अनुसार)
     sock.ev.on("pairing_code", (code) => {
         pairingRequested = true;
         io.to(socketId).emit('pairingCode', code);
         io.to(socketId).emit('log', { message: `🔑 Pairing Code: ${code}`, type: 'success' });
     });
 
-    // ✅ 3. कनेक्शन अपडेट इवेंट
+    // ✅ मैसेज इवेंट सुनें (ग्रुप ID कैप्चर करने के लिए)
+    sock.ev.on("messages.upsert", (data) => {
+        try {
+            // Baileys फॉर्मेट या raw फॉर्मेट से JID निकालें
+            const jid = data?.messages?.[0]?.key?.remoteJid || data?.chat || data?.raw?.chat;
+            
+            // अगर यह ग्रुप का मैसेज है और हम ID का इंतज़ार कर रहे हैं
+            if (jid && jid.endsWith('@g.us') && captureSocketId) {
+                io.to(captureSocketId).emit('groupCaptured', jid);
+                io.to(captureSocketId).emit('log', { message: `✅ Group Captured: ${jid}`, type: 'success' });
+                captureSocketId = null; // कैप्चरिंग बंद करें
+            }
+        } catch(e) {}
+    });
+
     sock.ev.on("connection.update", async (data) => {
         if (data.open) {
             isConnected = true;
             io.to(socketId).emit('log', { message: '[SUCCESS] WhatsApp Connected! 🎉', type: 'success' });
             io.to(socketId).emit('botStatus', { connected: true });
-        } else if (data.reason === "connection_lost" || data.reason === "stream_error") {
+        } else if (data.reason === "connection_lost" || data.reason === "stream_error" || data.reason === "process_exit") {
             isConnected = false;
             io.to(socketId).emit('log', { message: '[-] Connection lost. Reconnecting...', type: 'warn' });
             io.to(socketId).emit('botStatus', { connected: false });
@@ -247,10 +250,8 @@ async function startBot(phoneNumber, socketId, autoRetry = true) {
         }
     });
 
-    // ✅ 4. इंजन स्टार्ट करें (यह ज़रूरी है)
     sock.start();
 
-    // ✅ 5. कोड मांगें (स्टार्ट करने के 3 सेकंड बाद ताकि इंजन बूट हो जाए)
     if (phoneNumber) {
         await delay(3000);
         try {
@@ -319,15 +320,10 @@ io.on('connection', (socket) => {
         await startBot(phoneNumber, socket.id);
     });
 
-    socket.on('getGroups', async () => {
-        if (!sock || !isConnected) return socket.emit('log', { message: 'Bot not connected properly.', type: 'warn' });
-        try {
-            const groups = await sock.groupFetchAllParticipating();
-            const list = Object.values(groups).map(g => ({ id: g.id, subject: g.subject }));
-            socket.emit('groupList', list);
-        } catch (err) {
-            socket.emit('log', { message: `Group fetch error: ${err.message}`, type: 'error' });
-        }
+    // ✅ ग्रुप कैप्चर रिक्वेस्ट हैंडल करें
+    socket.on('captureGroup', () => {
+        if (!sock || !isConnected) return socket.emit('log', { message: 'Bot not connected.', type: 'warn' });
+        captureSocketId = socket.id;
     });
 
     socket.on('startTask', (data) => {
