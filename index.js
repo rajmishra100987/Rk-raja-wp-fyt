@@ -17,43 +17,20 @@ const io = new Server(server);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const APP_NAME = 'RAJ MISHRA';
-const APP_VERSION = '1.0.0';
-const START_TIME = Date.now();
-
-// ---------- Global state ----------
 let sock = null;
 let isConnected = false;
 let pairingRequested = false;
 let reconnectInterval = null;
-let currentPhoneNumber = null;
-let currentSocketId = null;
 
-// Task registry
 const tasks = new Map();
-const MAX_TASK_LOGS = 50;
-
-// Delay helper
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
-// ---------- Helpers ----------
 function genTaskId() {
     return `RAJ-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 }
 
-function serializeTask(t) {
-    return {
-        id: t.id,
-        targetJid: t.targetJid,
-        status: t.status,
-        sentCount: t.sentCount,
-        roundCount: t.roundCount,
-        totalMessages: t.messages.length,
-    };
-}
-
 // ================================================================
-//                HTML + CSS + JS FRONTEND (Pink + Creamy + White)
+//                HTML + CSS + JS FRONTEND
 // ================================================================
 const HTML_PAGE = `
 <!DOCTYPE html>
@@ -110,7 +87,6 @@ const HTML_PAGE = `
 
     <div class="status-bar" id="statusBar">🔴 Bot Disconnected</div>
 
-    <!-- Section 1: Connection -->
     <div id="connectSection">
         <label>📞 WhatsApp Number (with country code, no +)</label>
         <input type="text" id="phoneNumber" placeholder="e.g. 919876543210">
@@ -118,29 +94,22 @@ const HTML_PAGE = `
         <div class="pairing-code" id="pairingCodeDiv"></div>
     </div>
 
-    <!-- Section 2: Task Setup -->
     <div id="taskSection" style="display: none;">
-        <label>🎯 Target Group/Number ID (JID)</label>
+        <label>🎯 Target Number or Group ID</label>
         <div class="grid-2">
-            <input type="text" id="targetJid" placeholder="e.g. 1203630...@g.us or 91...@s.whatsapp.net">
+            <input type="text" id="targetJid" placeholder="e.g. 919876543210 (Number)">
             <button class="btn btn-outline" style="margin-top:0;" onclick="fetchGroups()">📋 Fetch Groups</button>
         </div>
-        
         <label>💬 Name Prefix</label>
         <input type="text" id="prefix" placeholder="e.g. RAJ MISHRA">
-
         <label>⏱️ Delay (seconds)</label>
         <input type="number" id="delaySec" value="5" min="1">
-
         <label>📄 Messages (One message per line)</label>
-        <textarea id="messages" placeholder="Hello World&#10;This is a test&#10;VAMPIRE RULEX is here!"></textarea>
-
+        <textarea id="messages" placeholder="Hello World&#10;This is a test"></textarea>
         <button class="btn" onclick="startTask()">🚀 START TASK</button>
     </div>
 
-    <!-- Section 3: Live Logs -->
     <div class="log-box" id="logBox"></div>
-
     <div class="footer">Developed with 💖 by <b>VAMPIRE RULEX</b> • Owner: <b>Raj Mishra</b></div>
 </div>
 
@@ -151,6 +120,7 @@ const HTML_PAGE = `
     const taskSection = document.getElementById('taskSection');
     const connectSection = document.getElementById('connectSection');
     const pairingCodeDiv = document.getElementById('pairingCodeDiv');
+    const connectBtn = document.getElementById('connectBtn');
 
     function appendLog(msg, type = 'info') {
         const line = document.createElement('div');
@@ -164,16 +134,18 @@ const HTML_PAGE = `
     
     socket.on('botStatus', (data) => {
         if (data.connected) {
-            statusBar.textContent = '🟢 Bot Connected & Active';
+            statusBar.textContent = '🟢 Bot Logged In & Active';
             statusBar.classList.add('connected');
             connectSection.style.display = 'none';
             taskSection.style.display = 'block';
             pairingCodeDiv.style.display = 'none';
+            connectBtn.disabled = true;
         } else {
             statusBar.textContent = '🔴 Bot Disconnected';
             statusBar.classList.remove('connected');
             connectSection.style.display = 'block';
             taskSection.style.display = 'none';
+            connectBtn.disabled = false;
         }
     });
 
@@ -183,22 +155,36 @@ const HTML_PAGE = `
         appendLog('🔑 Pairing Code: ' + code, 'success');
     });
 
+    // ✅ ग्रुप लिस्ट और UID हैंडलिंग
     socket.on('groupList', (groups) => {
         if (!groups.length) return appendLog('No groups found.', 'warn');
-        appendLog('Groups fetched! Check prompt.', 'success');
-        const groupStr = groups.map(g => g.subject + " -> " + g.id).join('\\n');
-        const selected = prompt("Copy Group ID:\\n\\n" + groupStr);
-        if (selected) document.getElementById('targetJid').value = selected;
+        appendLog('Groups fetched successfully!', 'success');
+        
+        // ग्रुप्स को फॉर्मेट करें: "Group Name -> ID"
+        const groupStr = groups.map(g => `${g.subject} -> ${g.id}`).join('\\n\\n');
+        
+        // यूजर को प्रॉम्प्ट दिखाएं
+        const selected = prompt("Copy the Group ID below and paste it in the Target box:\\n\\n" + groupStr);
+        
+        // अगर यूजर ने कुछ सेलेक्ट किया, तो उसे टारगेट बॉक्स में भर दें
+        if (selected && selected.trim() !== '') {
+            // अगर यूजर ने पूरी लाइन कॉपी की है, तो सिर्फ ID निकालें
+            const extractedId = selected.split('->').pop().trim();
+            document.getElementById('targetJid').value = extractedId;
+            appendLog('✅ Group ID added to Target!', 'success');
+        }
     });
 
     function connectBot() {
         const phone = document.getElementById('phoneNumber').value.trim();
         if (!phone) return alert('Enter phone number!');
+        connectBtn.disabled = true;
         appendLog('🔄 Connecting to WhatsApp...', 'info');
         socket.emit('connectBot', { phoneNumber: phone });
     }
 
     function fetchGroups() {
+        appendLog('⏳ Fetching groups...', 'info');
         socket.emit('getGroups');
     }
 
@@ -209,9 +195,7 @@ const HTML_PAGE = `
         const msgText = document.getElementById('messages').value.trim();
         
         if (!targetJid || !msgText) return alert('Target ID and Messages are required!');
-        
         const messages = msgText.split('\\n').map(m => m.trim()).filter(m => m);
-        
         socket.emit('startTask', { targetJid, messages, prefix, delay: delaySec });
         appendLog('🚀 Task sent to server!', 'success');
     }
@@ -223,64 +207,68 @@ const HTML_PAGE = `
 `;
 
 // ================================================================
-//                WHATSAPP BOT LOGIC (NOZEZ-WHATSMEOW)
+//                WHATSAPP BOT LOGIC
 // ================================================================
 async function startBot(phoneNumber, socketId, autoRetry = true) {
-    if (sock) {
-        io.to(socketId).emit('log', { message: 'Bot already connected.', type: 'warn' });
+    if (sock && isConnected) {
         io.to(socketId).emit('botStatus', { connected: true });
+        io.to(socketId).emit('log', { message: 'Bot is already logged in.', type: 'success' });
         return;
     }
-    
-    currentPhoneNumber = phoneNumber;
-    currentSocketId = socketId;
+
+    if (sock) {
+        io.to(socketId).emit('log', { message: 'Bot is initializing. Please wait for the Pairing Code...', type: 'warn' });
+        return;
+    }
 
     const sessionDir = './session';
     if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
 
-    // ✅ nozez-whatsmeow के अनुसार सही इनिशियलाइज़ेशन
-    sock = makeWASocket({ 
-        sessionName: path.join(sessionDir, 'session.db') 
-    });
-    
-    // ✅ इंजन स्टार्ट करें
+    sock = makeWASocket({ sessionName: path.join(sessionDir, 'session.db') });
     sock.start();
     pairingRequested = false;
 
-    // ✅ पेयरिंग कोड इवेंट को अलग से सुनें (यह सबसे महत्वपूर्ण बदलाव है)
     sock.ev.on('pairing_code', (code) => {
         io.to(socketId).emit('pairingCode', code);
-        io.emit('log', { message: `[+] Pairing Code: ${code}`, type: 'success' });
+        io.to(socketId).emit('log', { message: `🔑 Pairing Code: ${code}`, type: 'success' });
     });
 
-    // कनेक्शन अपडेट इवेंट
     sock.ev.on('connection.update', async (update) => {
         const { open, reason } = update;
 
         if (open) {
-            isConnected = true;
-            io.emit('log', { message: '[SUCCESS] WhatsApp Connected! 🎉', type: 'success' });
-            io.emit('botStatus', { connected: true });
-            pairingRequested = true; 
-        } else {
-            isConnected = false;
-            // ✅ कोड अब यहाँ जनरेट नहीं होगा, बल्कि नीचे दिए गए तरीके से होगा
-            if (!pairingRequested && phoneNumber) {
+            io.to(socketId).emit('log', { message: '🔄 WebSocket connected.', type: 'info' });
+            
+            if (sock.user) {
+                if (!isConnected) {
+                    isConnected = true;
+                    io.to(socketId).emit('log', { message: '✅ Session resumed!', type: 'success' });
+                    io.to(socketId).emit('botStatus', { connected: true });
+                }
+            } else if (!pairingRequested && phoneNumber) {
                 pairingRequested = true;
                 await delay(2000); 
                 try {
-                    // ✅ सही मेथड: requestPairingCode
                     await sock.requestPairingCode(phoneNumber);
-                    io.emit('log', { message: `[+] Pairing code requested. Please wait...`, type: 'info' });
-                } catch (error) {
-                    io.emit('log', { message: `[-] Pairing Code Failed: ${error.message}`, type: 'error' });
-                    sock = null;
-                    io.emit('botStatus', { connected: false });
+                    io.to(socketId).emit('log', { message: `[+] Pairing code requested. Please wait...`, type: 'info' });
+                } catch (err) {
+                    pairingRequested = false;
+                    io.to(socketId).emit('log', { message: `[-] Pairing Request Failed: ${err.message}`, type: 'error' });
                 }
-            } else if (reason === 'connection_lost' || reason === 'stream_error') {
-                io.emit('log', { message: '[-] Connection lost or Time Mismatch. Reconnecting...', type: 'warn' });
+            }
+        } else {
+            if (isConnected) {
+                isConnected = false;
+                io.to(socketId).emit('botStatus', { connected: false });
+            }
+
+            if (reason === 'connection_lost' || reason === 'stream_error') {
+                io.to(socketId).emit('log', { message: '[-] Connection lost. Reconnecting...', type: 'warn' });
+                if (sock && typeof sock.stop === 'function') {
+                    try { sock.stop(); } catch (e) {}
+                }
                 sock = null;
-                io.emit('botStatus', { connected: false });
+                pairingRequested = false;
                 if (autoRetry) {
                     await delay(3000);
                     startBot(phoneNumber, socketId, true);
@@ -289,13 +277,12 @@ async function startBot(phoneNumber, socketId, autoRetry = true) {
         }
     });
 
-    // हेल्थ चेक (Auto Reconnect)
     if (reconnectInterval) clearInterval(reconnectInterval);
     reconnectInterval = setInterval(async () => {
         if (!sock || !isConnected) {
-            io.emit('log', { message: '[-] Health check: Connection dead. Reconnecting...', type: 'warn' });
-            if (sock && typeof sock.disconnect === 'function') {
-                try { sock.disconnect(); } catch (e) {}
+            io.to(socketId).emit('log', { message: '[-] Health check: Connection dead. Reconnecting...', type: 'warn' });
+            if (sock && typeof sock.stop === 'function') {
+                try { sock.stop(); } catch (e) {}
             }
             sock = null;
             isConnected = false;
@@ -365,7 +352,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('getGroups', async () => {
-        if (!sock || !isConnected) return socket.emit('log', { message: 'Bot not connected.', type: 'warn' });
+        if (!sock || !isConnected) return socket.emit('log', { message: 'Bot not connected properly.', type: 'warn' });
         try {
             const groups = await sock.groupFetchAllParticipating();
             const list = Object.values(groups).map(g => ({ id: g.id, subject: g.subject }));
@@ -378,8 +365,17 @@ io.on('connection', (socket) => {
     socket.on('startTask', (data) => {
         if (!sock || !isConnected) return socket.emit('log', { message: 'Bot not connected.', type: 'error' });
         
-        const { targetJid, messages, prefix, delay: delaySec } = data;
+        let { targetJid, messages, prefix, delay: delaySec } = data;
         if (!targetJid || !messages?.length) return socket.emit('log', { message: 'Target/messages missing.', type: 'error' });
+
+        // ✅ AUTO-JID LOGIC (नंबर को अपने आप फॉर्मेट करता है)
+        targetJid = targetJid.trim();
+        if (!targetJid.includes('@')) {
+            const cleanNumber = targetJid.replace(/\D/g, ''); // स्पेस और + हटाता है
+            targetJid = `${cleanNumber}@s.whatsapp.net`;
+        } else if (targetJid.includes('@c.us')) {
+            targetJid = targetJid.replace('@c.us', '@s.whatsapp.net');
+        }
 
         const taskId = genTaskId();
         const task = {
@@ -393,8 +389,8 @@ io.on('connection', (socket) => {
 
     socket.on('stopBot', () => {
         for (const t of tasks.values()) t.loopRunning = false;
-        if (sock && typeof sock.disconnect === 'function') {
-            try { sock.disconnect(); } catch (e) {}
+        if (sock && typeof sock.stop === 'function') {
+            try { sock.stop(); } catch (e) {}
         }
         sock = null;
         isConnected = false;
@@ -403,10 +399,7 @@ io.on('connection', (socket) => {
     });
 });
 
-// ================================================================
-//                START SERVER (Silent)
-// ================================================================
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    // साइलेंट स्टार्ट, होस्टिंग के लॉग्स साफ रहेंगे
+    // Silent start
 });
