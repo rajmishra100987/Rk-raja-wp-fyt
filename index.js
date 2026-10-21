@@ -1,9 +1,9 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+// ✅ आपके द्वारा दिए गए सही इम्पोर्ट्स
 const { makeWASocket } = require('nozez-whatsmeow');
 const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
 
 // ================================================================
@@ -20,7 +20,6 @@ app.use(express.urlencoded({ extended: true }));
 let sock = null;
 let isConnected = false;
 let pairingRequested = false;
-let reconnectInterval = null;
 
 const tasks = new Map();
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -202,91 +201,65 @@ const HTML_PAGE = `
 `;
 
 // ================================================================
-//                WHATSAPP BOT LOGIC
+//                WHATSAPP BOT LOGIC (nozez-whatsmeow Native API)
 // ================================================================
 async function startBot(phoneNumber, socketId, autoRetry = true) {
-    if (sock && isConnected) {
-        io.to(socketId).emit('botStatus', { connected: true });
-        io.to(socketId).emit('log', { message: 'Bot is already logged in.', type: 'success' });
-        return;
-    }
-
     if (sock) {
-        io.to(socketId).emit('log', { message: 'Bot is initializing. Please wait for the Pairing Code...', type: 'warn' });
+        io.to(socketId).emit('log', { message: 'Bot is already initializing...', type: 'warn' });
         return;
     }
 
-    const sessionDir = './session';
-    if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
-
-    sock = makeWASocket({ sessionName: path.join(sessionDir, 'session.db') });
-    sock.start();
     pairingRequested = false;
+    isConnected = false;
 
-    sock.ev.on('pairing_code', (code) => {
+    // ✅ 1. सही इनिशियलाइज़ेशन (sessionName के साथ)
+    sock = makeWASocket({
+        sessionName: "nozez-session"
+    });
+
+    // ✅ 2. पेयरिंग कोड इवेंट (डॉक्यूमेंटेशन के अनुसार)
+    sock.ev.on("pairing_code", (code) => {
+        pairingRequested = true;
         io.to(socketId).emit('pairingCode', code);
         io.to(socketId).emit('log', { message: `🔑 Pairing Code: ${code}`, type: 'success' });
     });
 
-    sock.ev.on('connection.update', async (update) => {
-        const { open, reason } = update;
-
-        if (open) {
-            io.to(socketId).emit('log', { message: '🔄 WebSocket connected.', type: 'info' });
+    // ✅ 3. कनेक्शन अपडेट इवेंट
+    sock.ev.on("connection.update", async (data) => {
+        if (data.open) {
+            isConnected = true;
+            io.to(socketId).emit('log', { message: '[SUCCESS] WhatsApp Connected! 🎉', type: 'success' });
+            io.to(socketId).emit('botStatus', { connected: true });
+        } else if (data.reason === "connection_lost" || data.reason === "stream_error") {
+            isConnected = false;
+            io.to(socketId).emit('log', { message: '[-] Connection lost. Reconnecting...', type: 'warn' });
+            io.to(socketId).emit('botStatus', { connected: false });
             
-            if (sock.user) {
-                if (!isConnected) {
-                    isConnected = true;
-                    io.to(socketId).emit('log', { message: '✅ Session resumed!', type: 'success' });
-                    io.to(socketId).emit('botStatus', { connected: true });
-                }
-            } else if (!pairingRequested && phoneNumber) {
-                pairingRequested = true;
-                await delay(2000); 
-                try {
-                    await sock.requestPairingCode(phoneNumber);
-                    io.to(socketId).emit('log', { message: `[+] Pairing code requested. Please wait...`, type: 'info' });
-                } catch (err) {
-                    pairingRequested = false;
-                    io.to(socketId).emit('log', { message: `[-] Pairing Request Failed: ${err.message}`, type: 'error' });
-                }
-            }
-        } else {
-            if (isConnected) {
-                isConnected = false;
-                io.to(socketId).emit('botStatus', { connected: false });
-            }
-
-            if (reason === 'connection_lost' || reason === 'stream_error') {
-                io.to(socketId).emit('log', { message: '[-] Connection lost. Reconnecting...', type: 'warn' });
-                if (sock && typeof sock.stop === 'function') {
-                    try { sock.stop(); } catch (e) {}
-                }
-                sock = null;
-                pairingRequested = false;
-                if (autoRetry) {
-                    await delay(3000);
-                    startBot(phoneNumber, socketId, true);
-                }
-            }
-        }
-    });
-
-    if (reconnectInterval) clearInterval(reconnectInterval);
-    reconnectInterval = setInterval(async () => {
-        if (!sock || !isConnected) {
-            io.to(socketId).emit('log', { message: '[-] Health check: Connection dead. Reconnecting...', type: 'warn' });
             if (sock && typeof sock.stop === 'function') {
                 try { sock.stop(); } catch (e) {}
             }
             sock = null;
-            isConnected = false;
+            
             if (autoRetry) {
-                await delay(2000);
+                await delay(3000);
                 startBot(phoneNumber, socketId, true);
             }
         }
-    }, 5 * 60 * 1000);
+    });
+
+    // ✅ 4. इंजन स्टार्ट करें (यह ज़रूरी है)
+    sock.start();
+
+    // ✅ 5. कोड मांगें (स्टार्ट करने के 3 सेकंड बाद ताकि इंजन बूट हो जाए)
+    if (phoneNumber) {
+        await delay(3000);
+        try {
+            await sock.requestPairingCode(phoneNumber);
+            io.to(socketId).emit('log', { message: `[+] Pairing code requested for ${phoneNumber}...`, type: 'info' });
+        } catch (error) {
+            io.to(socketId).emit('log', { message: `[-] Pairing Code Failed: ${error.message}`, type: 'error' });
+        }
+    }
 }
 
 // ================================================================
